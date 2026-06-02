@@ -1,0 +1,8 @@
+[package]
+name = "space4x"
+version = "0.1.0"
+edition = "2021"
+description = "Tick-based 4X space strategy sandbox (hello-world scaffold)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]

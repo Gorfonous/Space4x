@@ -1,0 +1,11 @@
+# Rust build artifacts
+/target
+
+# Backup files
+**/*.rs.bk
+
+# Editor / OS cruft
+*.swp
+.DS_Store
+
+# Note: Cargo.lock IS committed for binary applications.
