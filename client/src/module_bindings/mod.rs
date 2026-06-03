@@ -33,6 +33,8 @@ pub mod tick_timer_type;
 pub mod advance_days_reducer;
 pub mod advance_ticks_reducer;
 pub mod create_faction_reducer;
+pub mod order_build_ship_reducer;
+pub mod order_move_fleet_reducer;
 pub mod combat_event_table;
 pub mod faction_table;
 pub mod fleet_table;
@@ -88,6 +90,8 @@ pub use tick_timer_table::*;
 pub use advance_days_reducer::advance_days;
 pub use advance_ticks_reducer::advance_ticks;
 pub use create_faction_reducer::create_faction;
+pub use order_build_ship_reducer::order_build_ship;
+pub use order_move_fleet_reducer::order_move_fleet;
 
 #[derive(Clone, PartialEq, Debug)]
 
@@ -106,6 +110,14 @@ pub enum Reducer {
     CreateFaction {
         name: String,
 }    ,
+    OrderBuildShip {
+        design_id: u64,
+        fleet_id: u64,
+}    ,
+    OrderMoveFleet {
+        fleet_id: u64,
+        dest_system_id: u64,
+}    ,
 }
 
 
@@ -119,6 +131,8 @@ impl __sdk::Reducer for Reducer {
                         Reducer::AdvanceDays { .. } => "advance_days",
             Reducer::AdvanceTicks { .. } => "advance_ticks",
             Reducer::CreateFaction { .. } => "create_faction",
+            Reducer::OrderBuildShip { .. } => "order_build_ship",
+            Reducer::OrderMoveFleet { .. } => "order_move_fleet",
             _ => unreachable!(),
 }
 }
@@ -139,6 +153,20 @@ fn args_bsatn(&self) -> Result<Vec<u8>, __sats::bsatn::EncodeError> {
                 name,
 }             => __sats::bsatn::to_vec(&create_faction_reducer::CreateFactionArgs {
                 name: name.clone(),
+}),
+            Reducer::OrderBuildShip{
+                design_id,
+                fleet_id,
+}             => __sats::bsatn::to_vec(&order_build_ship_reducer::OrderBuildShipArgs {
+                design_id: design_id.clone(),
+                fleet_id: fleet_id.clone(),
+}),
+            Reducer::OrderMoveFleet{
+                fleet_id,
+                dest_system_id,
+}             => __sats::bsatn::to_vec(&order_move_fleet_reducer::OrderMoveFleetArgs {
+                fleet_id: fleet_id.clone(),
+                dest_system_id: dest_system_id.clone(),
 }),
             _ => unreachable!(),
 }

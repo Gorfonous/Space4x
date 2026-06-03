@@ -53,11 +53,14 @@ spacetime build -p server
 sh scripts/start-local.sh                 # terminal 1 — runs on 127.0.0.1:3000
 sh scripts/publish-local.sh               # terminal 2 — publishes as "space4x"
 
-# 4. Advance time and inspect (the client is read-only; advancing N ticks is
-#    the only command it sends — here, one day = TICKS_PER_DAY ticks)
+# 4. Drive the simulation: issue orders, then advance time (1 day = TICKS_PER_DAY)
+spacetime call space4x order_build_ship <design_id> <fleet_id>     # queue a build
+spacetime call space4x order_move_fleet <fleet_id> <dest_system_id>
 spacetime call space4x advance_days 1
-spacetime sql  space4x "SELECT * FROM faction"   # resources grew
-spacetime sql  space4x "SELECT * FROM sim_run"   # completion signal
+spacetime sql  space4x "SELECT * FROM faction"        # resources
+spacetime sql  space4x "SELECT * FROM ship"           # fleets / ships
+spacetime sql  space4x "SELECT * FROM combat_event"   # battles
+spacetime sql  space4x "SELECT * FROM sim_run"        # tick-batch completion log
 spacetime logs space4x
 ```
 
@@ -65,10 +68,13 @@ spacetime logs space4x
 
 ## Status
 
-Milestone 1 done; Milestone 2 wired. `init` seeds the galaxy (8 systems + planets)
-with a player and an AI faction. The desktop client connects **read‑only**, renders
-Empire + Systems from live subscriptions, and drives time with Advance Day / Advance
-Tick — its only command is to advance the simulation by N ticks (`advance_ticks`, or
-`advance_days` = days × `TICKS_PER_DAY`); the server records a `sim_run` row when done. The deterministic
+Milestones 1–2 done; core simulation (M4) in. `init` seeds the galaxy (8 systems +
+planets) with a player and an AI faction, each given a starter Scout design + home
+fleet. Each tick the server simulates fleet **movement**, ship **building**, and
+deterministic **combat** alongside the economy; `advance_ticks` / `advance_days`
+(= days × `TICKS_PER_DAY`) drive time and log a `sim_run` row. The desktop client
+connects, renders Empire + Systems from live subscriptions, and currently drives
+time (Advance Day / Tick); the build/move/attack reducers exist server-side and get
+client UI next (see [docs/TDD.md](docs/TDD.md) §10). The deterministic
 `run_tick` does the economy step today; movement, combat, and ship building land
 next (see [docs/TDD.md](docs/TDD.md) §10).

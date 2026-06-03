@@ -17,7 +17,7 @@ use spacetimedb::{Identity, ReducerContext, ScheduleAt, Table, Timestamp};
 // The wire enums BlockType / OrderType / OrderStatus are defined once in the
 // shared crate (single source of truth). The `spacetimedb-types` feature there
 // gives them their `SpacetimeType` derives so they can be used in tables here.
-use starframe_shared::{BlockType, OrderStatus, OrderType};
+use starframe_shared::{build_ticks, ship_stats, BlockPlacement, BlockType, OrderStatus, OrderType};
 
 // ──────────────────────────────────────────────────────────────────────────
 // Tables — singletons & accounts
@@ -347,6 +347,11 @@ pub fn init(ctx: &ReducerContext) {
         });
     }
 
+    // Starter assets per faction: a default warship design + a home fleet with
+    // one ship, so build / move / combat are exercisable immediately.
+    seed_starter_assets(ctx, player.id, player_home);
+    seed_starter_assets(ctx, ai.id, ai_home);
+
     log::info!(
         "init: seeded {} systems; player faction {} (home {}), AI faction {} (home {})",
         GALAXY_SYSTEMS,
@@ -501,18 +506,132 @@ fn current_tick(ctx: &ReducerContext) -> Result<u64, String> {
         .ok_or_else(|| "game state not initialized".to_string())
 }
 
-/// One deterministic simulation step (ECONOMY + ADVANCE for now;
-/// movement/combat/build land next).
+/// One deterministic simulation step. Phase order matters: arrivals before
+/// combat (a fleet arriving fights this tick), combat before economy, builds
+/// last (a freshly built ship doesn't act until next tick).
 fn run_tick(ctx: &ReducerContext) -> Result<(), String> {
+    let now = current_tick(ctx)?;
+    movement_phase(ctx, now);
+    combat_phase(ctx, now);
+    economy_phase(ctx);
+    build_phase(ctx, now);
+    cleanup_phase(ctx);
+
+    // ADVANCE — bump the clock and the RNG seed (seed reserved for future
+    // stochastic rules; the MVP economy/combat are fully deterministic).
     let mut gs = ctx
         .db
         .game_state()
         .id()
         .find(1)
         .ok_or("game state not initialized")?;
+    gs.current_tick += 1;
+    gs.rng_seed = splitmix64(gs.rng_seed);
+    ctx.db.game_state().id().update(gs);
+    Ok(())
+}
 
-    // ECONOMY — each owned planet contributes to its owner faction.
-    // Stable iteration by id keeps the tick deterministic.
+/// MOVEMENT — fleets in transit that reach their arrival tick relocate (with
+/// every member ship) to the destination system.
+fn movement_phase(ctx: &ReducerContext, now: u64) {
+    let mut fleets: Vec<Fleet> = ctx.db.fleet().iter().collect();
+    fleets.sort_by_key(|f| f.id);
+    for f in fleets {
+        let (Some(dest), Some(arr)) = (f.dest_system_id, f.arrival_tick) else {
+            continue;
+        };
+        if arr > now + 1 {
+            continue;
+        }
+        let members: Vec<FleetShip> = ctx.db.fleet_ship().fleet_id().filter(f.id).collect();
+        for fs in members {
+            if let Some(ship) = ctx.db.ship().id().find(fs.ship_id) {
+                ctx.db.ship().id().update(Ship {
+                    system_id: dest,
+                    ..ship
+                });
+            }
+        }
+        ctx.db.fleet().id().update(Fleet {
+            system_id: dest,
+            dest_system_id: None,
+            arrival_tick: None,
+            ..f
+        });
+    }
+}
+
+/// COMBAT — in any system holding living ships of 2+ factions, every armed ship
+/// fires once at the lowest-id enemy. Deterministic: sorted by id, no RNG.
+fn combat_phase(ctx: &ReducerContext, now: u64) {
+    use std::collections::HashMap;
+
+    let attack_of: HashMap<u64, i64> = ctx
+        .db
+        .ship_design()
+        .iter()
+        .map(|d| (d.id, d.attack))
+        .collect();
+
+    let mut ships: Vec<Ship> = ctx.db.ship().iter().collect();
+    ships.sort_by_key(|s| s.id);
+    let mut hp: Vec<i64> = ships.iter().map(|s| s.hp).collect();
+
+    let mut by_system: HashMap<u64, Vec<usize>> = HashMap::new();
+    for (i, s) in ships.iter().enumerate() {
+        by_system.entry(s.system_id).or_default().push(i);
+    }
+    let mut systems: Vec<u64> = by_system.keys().copied().collect();
+    systems.sort();
+
+    for sys in systems {
+        let idxs = by_system.get(&sys).cloned().unwrap_or_default();
+        let mut factions: Vec<u64> = idxs.iter().map(|&i| ships[i].faction_id).collect();
+        factions.sort();
+        factions.dedup();
+        if factions.len() < 2 {
+            continue;
+        }
+        for &attacker in &idxs {
+            if hp[attacker] <= 0 {
+                continue;
+            }
+            let atk = *attack_of.get(&ships[attacker].design_id).unwrap_or(&0);
+            if atk <= 0 {
+                continue;
+            }
+            let target = idxs
+                .iter()
+                .copied()
+                .find(|&t| ships[t].faction_id != ships[attacker].faction_id && hp[t] > 0);
+            if let Some(t) = target {
+                hp[t] -= atk;
+                ctx.db.combat_event().insert(CombatEvent {
+                    id: 0,
+                    tick: now + 1,
+                    system_id: sys,
+                    attacker_ship_id: ships[attacker].id,
+                    defender_ship_id: ships[t].id,
+                    attacker_faction_id: ships[attacker].faction_id,
+                    defender_faction_id: ships[t].faction_id,
+                    damage_dealt: atk,
+                    destroyed: hp[t] <= 0,
+                });
+            }
+        }
+    }
+
+    // Persist hp changes once.
+    for (i, s) in ships.into_iter().enumerate() {
+        if hp[i] != s.hp {
+            ctx.db.ship().id().update(Ship { hp: hp[i], ..s });
+        }
+    }
+}
+
+/// ECONOMY — each owned planet contributes to its owner faction. Stable
+/// iteration by id keeps the tick deterministic.
+fn economy_phase(ctx: &ReducerContext) {
     let mut planets: Vec<Planet> = ctx.db.planet().iter().collect();
     planets.sort_by_key(|p| p.id);
     for p in planets {
@@ -527,13 +646,64 @@ fn run_tick(ctx: &ReducerContext) -> Result<(), String> {
             }
         }
     }
+}
 
-    // ADVANCE — bump the clock and the RNG seed (seed reserved for future
-    // stochastic rules; MVP economy/combat are fully deterministic).
-    gs.current_tick += 1;
-    gs.rng_seed = splitmix64(gs.rng_seed);
-    ctx.db.game_state().id().update(gs);
-    Ok(())
+/// BUILD — complete BuildShip orders whose timer elapsed: spawn the ship into
+/// its target fleet at that fleet's system.
+fn build_phase(ctx: &ReducerContext, now: u64) {
+    let mut orders: Vec<Order> = ctx
+        .db
+        .orders()
+        .iter()
+        .filter(|o| o.order_type == OrderType::BuildShip && o.status == OrderStatus::Active)
+        .collect();
+    orders.sort_by_key(|o| o.id);
+    for o in orders {
+        if !o.complete_tick.map_or(false, |c| c <= now + 1) {
+            continue;
+        }
+        if let (Some(design_id), Some(fleet_id)) = (o.target_id, o.fleet_id) {
+            if let (Some(design), Some(fleet)) = (
+                ctx.db.ship_design().id().find(design_id),
+                ctx.db.fleet().id().find(fleet_id),
+            ) {
+                let ship = ctx.db.ship().insert(Ship {
+                    id: 0,
+                    design_id: design.id,
+                    faction_id: design.faction_id,
+                    system_id: fleet.system_id,
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    hp: design.max_hp,
+                    fuel: 100,
+                });
+                ctx.db.fleet_ship().insert(FleetShip {
+                    ship_id: ship.id,
+                    fleet_id: fleet.id,
+                });
+            }
+        }
+        ctx.db.orders().id().update(Order {
+            status: OrderStatus::Done,
+            ..o
+        });
+    }
+}
+
+/// CLEANUP — delete destroyed ships and their fleet membership.
+fn cleanup_phase(ctx: &ReducerContext) {
+    let dead: Vec<u64> = ctx
+        .db
+        .ship()
+        .iter()
+        .filter(|s| s.hp <= 0)
+        .map(|s| s.id)
+        .collect();
+    for ship_id in dead {
+        ctx.db.fleet_ship().ship_id().delete(ship_id);
+        ctx.db.ship().id().delete(ship_id);
+    }
 }
 
 /// Deterministic PRNG step (SplitMix64). Used to advance `GameState.rng_seed`.
@@ -542,4 +712,182 @@ fn splitmix64(seed: u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Orders (gameplay commands). Reference entities by id; the entity's faction
+// determines whose resources/ships are affected. Proper caller→faction auth is
+// a multiplayer concern, tracked for the shared phase.
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Queue a ship build into `fleet_id`: deduct the design's mineral cost now and
+/// complete after `build_ticks(cost)`. The ship joins the fleet when done.
+#[spacetimedb::reducer]
+pub fn order_build_ship(ctx: &ReducerContext, design_id: u64, fleet_id: u64) -> Result<(), String> {
+    let design = ctx
+        .db
+        .ship_design()
+        .id()
+        .find(design_id)
+        .ok_or("design not found")?;
+    let fleet = ctx.db.fleet().id().find(fleet_id).ok_or("fleet not found")?;
+    if fleet.faction_id != design.faction_id {
+        return Err("fleet and design belong to different factions".to_string());
+    }
+    let mut faction = ctx
+        .db
+        .faction()
+        .id()
+        .find(design.faction_id)
+        .ok_or("faction not found")?;
+    if faction.minerals < design.total_cost {
+        return Err(format!(
+            "insufficient minerals: need {}, have {}",
+            design.total_cost, faction.minerals
+        ));
+    }
+    faction.minerals -= design.total_cost;
+    ctx.db.faction().id().update(faction);
+
+    let now = current_tick(ctx)?;
+    ctx.db.orders().insert(Order {
+        id: 0,
+        faction_id: design.faction_id,
+        order_type: OrderType::BuildShip,
+        status: OrderStatus::Active,
+        target_id: Some(design_id),
+        target_system_id: None,
+        ship_id: None,
+        fleet_id: Some(fleet_id),
+        created_tick: now,
+        complete_tick: Some(now + build_ticks(design.total_cost)),
+    });
+    Ok(())
+}
+
+/// Order a fleet to move to another system. Arrival is ceil(distance / speed)
+/// ticks away, where speed is the slowest member ship's thrust/mass.
+#[spacetimedb::reducer]
+pub fn order_move_fleet(
+    ctx: &ReducerContext,
+    fleet_id: u64,
+    dest_system_id: u64,
+) -> Result<(), String> {
+    let fleet = ctx.db.fleet().id().find(fleet_id).ok_or("fleet not found")?;
+    if dest_system_id == fleet.system_id {
+        return Err("fleet is already in that system".to_string());
+    }
+    let src = ctx
+        .db
+        .star_system()
+        .id()
+        .find(fleet.system_id)
+        .ok_or("source system missing")?;
+    let dest = ctx
+        .db
+        .star_system()
+        .id()
+        .find(dest_system_id)
+        .ok_or("destination system not found")?;
+    let speed = fleet_speed(ctx, fleet_id);
+    if speed <= 0.0 {
+        return Err("fleet has no propulsion (no ships, or no engines)".to_string());
+    }
+    let dx = dest.x - src.x;
+    let dy = dest.y - src.y;
+    let dz = dest.z - src.z;
+    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+    let ticks = ((dist / (speed * starframe_shared::SPEED_SCALE)).ceil() as u64).max(1);
+    let now = current_tick(ctx)?;
+    ctx.db.fleet().id().update(Fleet {
+        dest_system_id: Some(dest_system_id),
+        arrival_tick: Some(now + ticks),
+        ..fleet
+    });
+    Ok(())
+}
+
+/// Slowest member ship's speed (thrust/mass); 0 if the fleet is empty.
+fn fleet_speed(ctx: &ReducerContext, fleet_id: u64) -> f32 {
+    let mut slowest: Option<f32> = None;
+    for fs in ctx.db.fleet_ship().fleet_id().filter(fleet_id) {
+        if let Some(ship) = ctx.db.ship().id().find(fs.ship_id) {
+            if let Some(design) = ctx.db.ship_design().id().find(ship.design_id) {
+                let s = if design.total_mass > 0.0 {
+                    design.thrust / design.total_mass
+                } else {
+                    0.0
+                };
+                slowest = Some(slowest.map_or(s, |m| m.min(s)));
+            }
+        }
+    }
+    slowest.unwrap_or(0.0)
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Starter assets (seeded in init)
+// ──────────────────────────────────────────────────────────────────────────
+
+fn default_warship_blocks() -> Vec<BlockPlacement> {
+    vec![
+        BlockPlacement::new(0, 0, 0, BlockType::CommandCore),
+        BlockPlacement::new(1, 0, 0, BlockType::Engine),
+        BlockPlacement::new(-1, 0, 0, BlockType::Reactor),
+        BlockPlacement::new(0, 1, 0, BlockType::Weapon),
+        BlockPlacement::new(0, -1, 0, BlockType::Hull),
+    ]
+}
+
+/// Insert a default "Scout" design for `faction_id`, plus a home fleet with one
+/// ship of that design at `system_id`.
+fn seed_starter_assets(ctx: &ReducerContext, faction_id: u64, system_id: u64) {
+    let blocks = default_warship_blocks();
+    let stats = ship_stats(&blocks);
+    let design = ctx.db.ship_design().insert(ShipDesign {
+        id: 0,
+        faction_id,
+        name: "Scout".to_string(),
+        total_mass: stats.mass,
+        total_cost: stats.cost,
+        max_hp: stats.max_hp,
+        thrust: stats.thrust,
+        attack: stats.attack,
+        block_count: stats.block_count,
+        created_tick: 0,
+    });
+    for b in &blocks {
+        ctx.db.ship_design_block().insert(ShipDesignBlock {
+            id: 0,
+            design_id: design.id,
+            x: b.x,
+            y: b.y,
+            z: b.z,
+            block_type: b.block_type,
+            rotation: b.rotation,
+        });
+    }
+    let fleet = ctx.db.fleet().insert(Fleet {
+        id: 0,
+        faction_id,
+        system_id,
+        name: "Home Fleet".to_string(),
+        dest_system_id: None,
+        arrival_tick: None,
+    });
+    let ship = ctx.db.ship().insert(Ship {
+        id: 0,
+        design_id: design.id,
+        faction_id,
+        system_id,
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        hp: stats.max_hp,
+        fuel: 100,
+    });
+    ctx.db.fleet_ship().insert(FleetShip {
+        ship_id: ship.id,
+        fleet_id: fleet.id,
+    });
 }
