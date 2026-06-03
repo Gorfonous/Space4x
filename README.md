@@ -40,7 +40,10 @@ Prerequisites: the Rust toolchain, the `wasm32-unknown-unknown` target
 (`curl -sSf https://install.spacetimedb.com | sh`).
 
 ```sh
-# 1. Build / run the desktop client (native window)
+# 1. Run the desktop client (native window). It connects READ-ONLY to the
+#    space4x database at 127.0.0.1:3000 and renders Empire + Systems from live
+#    subscriptions; its only commands are the Advance Day / Advance Tick
+#    buttons. Start + publish the server first (steps 2-3) so there's data.
 cargo run -p starframe-client
 
 # 2. Build the server module to wasm (validates the module)
@@ -62,9 +65,10 @@ spacetime logs space4x
 
 ## Status
 
-Milestone 1 complete. `init` seeds the galaxy (8 systems + planets) with a player
-and an AI faction. The client is **read‑only**: its only command is to advance the
-simulation by N ticks (`advance_ticks`, or `advance_days` = days × `TICKS_PER_DAY`),
-and the server records a `sim_run` row when the batch is done. The deterministic
+Milestone 1 done; Milestone 2 wired. `init` seeds the galaxy (8 systems + planets)
+with a player and an AI faction. The desktop client connects **read‑only**, renders
+Empire + Systems from live subscriptions, and drives time with Advance Day / Advance
+Tick — its only command is to advance the simulation by N ticks (`advance_ticks`, or
+`advance_days` = days × `TICKS_PER_DAY`); the server records a `sim_run` row when done. The deterministic
 `run_tick` does the economy step today; movement, combat, and ship building land
 next (see [docs/TDD.md](docs/TDD.md) §10).

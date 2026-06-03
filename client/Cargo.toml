@@ -7,3 +7,5 @@ description = "Starframe (Space4x) desktop client — eframe/egui scaffold"
 
 [dependencies]
 eframe = "0.34"
+spacetimedb-sdk = "2.3.0"
+starframe-shared = { path = "../shared" }
