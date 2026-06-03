@@ -12,6 +12,6 @@ echo
 echo "Published '$DB_NAME' to the local server."
 echo "Inspect it with, e.g.:"
 echo "  spacetime sql  $DB_NAME \"SELECT * FROM star_system\""
-echo "  spacetime call $DB_NAME create_faction 'Terran Union'"
-echo "  spacetime call $DB_NAME advance_tick"
+echo "  spacetime call $DB_NAME advance_days 1   # process one day = TICKS_PER_DAY ticks"
+echo "  spacetime sql  $DB_NAME \"SELECT run_id, requested_ticks, from_tick, to_tick FROM sim_run\""
 echo "  spacetime logs $DB_NAME"

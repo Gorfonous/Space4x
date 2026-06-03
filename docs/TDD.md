@@ -415,14 +415,17 @@ pub enum OrderStatus { Pending, Active, Done, Failed }
 
 Reducers are the **only** way state changes. Every mutating reducer follows the same skeleton: resolve caller → validate ownership/preconditions → mutate → (optionally) log. They return `Result<(), String>`; the `Err` string surfaces to the client via the SDK's reducer‑status callback (§8.2).
 
+> **Client contract (current phase).** The client is **read‑only** except for a **single command: advance the simulation by N ticks** — `advance_ticks(n)`, or `advance_days(d)` = `d × TICKS_PER_DAY`. The server runs the batch in one transaction, appends a `sim_run` row as the completion signal, and then all state is read‑only via subscriptions. **Every other reducer below (`create_faction`, the `order_*` family, the ship‑editor `*_draft` / `commit_design`) is NOT in the client contract yet** — the starting world (including the player's faction) is **seeded server‑side in `init`**, and those reducers exist for tests/admin and become *future* client messages. ("One mutation = advance time" is also the exact shape the shared‑universe phase wants, where a scheduled tick replaces the client's call.)
+
 ### 4.1 Lifecycle
 
 ```rust
 #[reducer(init)]
 pub fn init(ctx: &ReducerContext) {
     // Insert GameState{ id:1, current_tick:0, rng_seed: 0x9E3779B97F4A7C15, schema_version:1 }
-    // Seed the galaxy (see §10 M1 / init.rs): N star systems, planets,
-    // one player faction placeholder + a couple of AI factions.
+    // Seed the galaxy (see §10 M1): star systems, planets, and — because the
+    // client is read-only and cannot create one — the PLAYER's faction plus an
+    // AI faction, each with a home system.
 }
 
 #[reducer(client_connected)]
@@ -524,39 +527,51 @@ pub fn order_build_ship(ctx: &ReducerContext, design_id: u64, system_id: u64)
 pub fn cancel_order(ctx: &ReducerContext, order_id: u64) -> Result<(), String>;
 ```
 
-### 4.6 The tick entry points
+### 4.6 The tick entry points — the client's one command
 
-The tick *logic* lives in one place (`run_tick`). MVP exposes a manual entry point; the shared phase adds a scheduled one. **Same body, two doors.**
+The tick *logic* lives in one place (`run_tick`, §5). The client never calls it directly; it asks the server to process a **batch** of ticks. `advance_ticks(n)` is the primitive; `advance_days(d)` = `d × TICKS_PER_DAY` is the convenience ("go forward one day"). The batch runs in **one transaction** and appends a `sim_run` row as the completion signal, after which all state is read‑only via subscriptions. The shared phase adds a timer that calls the same `run_tick`.
 
 ```rust
-/// MVP: the player's "Advance Turn" button calls this.
+const MAX_TICKS_PER_CALL: u64 = 100_000;   // bound one transaction's work
+
+/// THE client→server command: process `num_ticks` ticks, then record a sim_run.
 #[reducer]
-pub fn advance_tick(ctx: &ReducerContext) -> Result<(), String> {
-    run_tick(ctx)
+pub fn advance_ticks(ctx: &ReducerContext, num_ticks: u64) -> Result<(), String> { do_advance(ctx, num_ticks) }
+
+/// Convenience: days × TICKS_PER_DAY ticks.
+#[reducer]
+pub fn advance_days(ctx: &ReducerContext, days: u64) -> Result<(), String> {
+    do_advance(ctx, days * starframe_shared::TICKS_PER_DAY)
 }
 
-/// Shared phase: enable by inserting a TickTimer row. Logic is identical.
+/// Shared phase: insert a TickTimer row → one tick per fire. Same `run_tick`.
 #[reducer]
-pub fn scheduled_tick(ctx: &ReducerContext, _timer: TickTimer) -> Result<(), String> {
-    run_tick(ctx)
-}
+pub fn scheduled_tick(ctx: &ReducerContext, _t: TickTimer) -> Result<(), String> { run_tick(ctx) }
 
-/// The whole simulation step. See §5 for the pipeline.
-fn run_tick(ctx: &ReducerContext) -> Result<(), String> { /* §5 */ Ok(()) }
+fn do_advance(ctx: &ReducerContext, n: u64) -> Result<(), String> {
+    // validate 1..=MAX_TICKS_PER_CALL; loop run_tick n times; insert
+    // SimRun { requested_ticks, from_tick, to_tick, completed_at }. One txn.
+    Ok(())
+}
 ```
+
+The completion signal is the `sim_run` table (`run_id`, `requested_ticks`, `from_tick`, `to_tick`, `completed_at`): the client subscribes to it, and the new row (plus the reducer‑status callback) tells it the batch is done.
 
 ### 4.7 Reducer catalogue (summary)
 
-| Reducer | Kind | Validates | Effect |
+**In the client contract today: only the advance commands.** Everything else is server‑internal or seeded and becomes a *future* client message.
+
+| Reducer | Client contract? | Validates | Effect |
 |---|---|---|---|
-| `init` | lifecycle | — | seed galaxy + `GameState` |
-| `create_faction` | immediate | identity unbound | new `Faction` + `PlayerAccount` |
-| `create_draft` / `place_block` / `remove_block` | immediate | draft ownership | mutate draft tables |
-| `commit_design` | immediate | connectivity, required blocks, power, ownership | immutable `ShipDesign` + blocks |
-| `order_move_fleet` / `order_attack` | immediate | fleet ownership, dest exists | queue `Order` |
-| `order_build_ship` | immediate | design ownership, affordability | deduct cost, queue timed `Order` |
-| `cancel_order` | immediate | order ownership, still `Pending` | mark `Failed`/delete; refund build cost |
-| `advance_tick` / `scheduled_tick` | tick | — | run full pipeline (§5) |
+| `advance_ticks` / `advance_days` | **YES — the only one** | `1..=MAX_TICKS_PER_CALL` | run N ticks (§5), append `sim_run` |
+| `init` | lifecycle | — | seed galaxy + player & AI factions + `GameState` |
+| `scheduled_tick` | shared‑phase only | — | one tick per timer fire |
+| `create_faction` | deferred | identity unbound | new `Faction` (+ `PlayerAccount`) |
+| `create_draft` / `place_block` / `remove_block` | deferred | draft ownership | mutate draft tables |
+| `commit_design` | deferred | connectivity, required blocks, power, ownership | immutable `ShipDesign` + blocks |
+| `order_move_fleet` / `order_attack` | deferred | fleet ownership, dest exists | queue `Order` |
+| `order_build_ship` | deferred | design ownership, affordability | deduct cost, queue timed `Order` |
+| `cancel_order` | deferred | order ownership, still `Pending` | mark `Failed`/delete; refund build cost |
 
 ---
 
@@ -879,18 +894,18 @@ designer::show(ui, frame, editor, conn):
 
 ## 8. Client–Server Sync Model
 
-### 8.1 Subscriptions drive everything
+### 8.1 The client is read‑only; one command advances time
 
-The client holds no authoritative state — it mirrors subscription results into `WorldCache` and renders from it. A reducer call → server mutates → affected rows stream back via callbacks → cache updates → next frame reflects it. There is no separate "fetch" path.
+The client holds no authoritative state — it subscribes, mirrors rows into `WorldCache`, and renders. In the current phase it issues **exactly one** mutation: `advance_ticks(n)` / `advance_days(d)` (= `d × TICKS_PER_DAY`). The server processes the batch in one transaction, appends a `sim_run` row, and streams the resulting rows back; the client then reads the new state. There is no other client→server write yet — faction setup, orders, and design commits are seeded/internal for now and arrive as future commands (§4 note).
 
-### 8.2 Reducer results & errors
+### 8.2 The completion signal
 
-Each reducer call resolves to a status (committed / failed) the SDK surfaces via a callback. The client maps a failed status's `Err(String)` to a toast/inline message (e.g. `commit_design` → "ship not connected; 2 blocks are detached"). Optimistic UI is unnecessary in MVP (local latency).
+A batch is one atomic transaction, so the client sees the final world state and the new `sim_run` row together. "Done" is signalled two ways: (1) the SDK's reducer‑status callback when `advance_*` commits — a failed status carries the `Err(String)`, e.g. "num_ticks must be at least 1"; and (2) a new `sim_run` row (`run_id`, `requested_ticks`, `from_tick`, `to_tick`, `completed_at`) appearing in the subscription. The client refreshes its views off either.
 
 ### 8.3 What changes for the shared universe
 
 - **RLS / scoped subscriptions:** replace `SELECT *` with faction‑scoped queries (your ships/fleets/designs/orders) plus the public galaxy (`star_system`, `planet`). `player_account` becomes private (each identity sees only its own row).
-- **Tick trigger:** insert a `tick_timer` row → `scheduled_tick` fires on a cadence; remove the client's manual **Advance Turn** (or gate it to admins).
+- **Tick trigger:** insert a `tick_timer` row → `scheduled_tick` fires on a cadence; the client's `advance_*` command is removed (or gated to admins) since time then advances on its own.
 - **Order conflict:** already handled — orders queue and resolve in deterministic id order during the tick.
 - **Prediction/reconciliation:** optional, only if hosted latency hurts the editor; the authority model already supports it.
 
@@ -914,12 +929,12 @@ Maps the GDD's four phases to technical milestones. Each is independently demoab
 
 ### M1 — Core Engine (GDD Phase 1)
 **Deliver:** workspace + 3 crates; `shared` enums + constants + formulas + `validate`; **all** tables (§3); `init` seeds ~50 systems, planets, 1 player + 2 AI factions; `create_faction`; `advance_tick` running ECONOMY + ADVANCE only.
-**Acceptance:** `spacetime publish starframe`; call `create_faction` then `advance_tick` via CLI; `spacetime sql "SELECT * FROM faction"` shows resources rising each tick. `cargo test -p starframe-shared` green.
+**Acceptance:** `spacetime publish`; `spacetime call <db> advance_days 1` (= `TICKS_PER_DAY` ticks); `spacetime sql "SELECT * FROM faction"` shows resources risen and a `sim_run` row recorded. `cargo test -p starframe-shared` green.
 **Tests:** unit tests for all formulas and `validate` fixtures.
 
 ### M2 — Client Foundation (GDD Phase 2)
-**Deliver:** `spacetime generate` bindings; client connects + subscribes; **Empire Overview** and **System View** render live seeded data; **Advance Turn** button calls `advance_tick`.
-**Acceptance:** launch client, see the seeded galaxy and faction resources, click **Advance Turn**, watch `current_tick` and resources update live (no restart).
+**Deliver:** `spacetime generate` bindings; client connects + subscribes; **Empire Overview** and **System View** render live seeded data; an **Advance Day** button calls `advance_days(1)` (the client's only command).
+**Acceptance:** launch client, see the seeded galaxy and faction resources, click **Advance Day**, watch `current_tick` jump by `TICKS_PER_DAY` and resources update live (no restart).
 **Tests:** manual smoke — connect, observe a row callback updating the UI.
 
 ### M3 — Ship Editor (GDD Phase 3)
@@ -929,7 +944,7 @@ Maps the GDD's four phases to technical milestones. Each is independently demoab
 
 ### M4 — Simulation Loop (GDD Phase 4)
 **Deliver:** `order_build_ship` + BUILD phase; fleet create + `order_move_fleet` (transit + arrival relocation); COMBAT + `combat_event`; **Fleet Manager** + combat‑log UI.
-**Acceptance (the GDD success criteria):** create a faction → design a ship → build it → form a fleet → move it between systems over several ticks → engage an enemy fleet → watch HP drop and ships get destroyed **deterministically** (same seed + orders → identical outcome). Run a tick, see the universe change.
+**Acceptance (the GDD success criteria):** create a faction → design a ship → build it → form a fleet → move it between systems over several ticks → engage an enemy fleet → watch HP drop and ships get destroyed **deterministically** (same seed + orders → identical outcome). Advance time (`advance_days`) and watch the universe change.
 **Tests:** golden tick tests (§12) for movement arrival, a scripted battle, and an economy delta.
 
 ---

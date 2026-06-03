@@ -230,6 +230,26 @@ pub struct CombatEvent {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// Tables — simulation run log (the client's "batch done" signal)
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Appended once per advance_ticks / advance_days call, after the batch
+/// commits. The client subscribes to this table; a new row (together with the
+/// reducer-completion callback) is the explicit "your requested ticks are
+/// processed" signal. The batch runs in one atomic transaction, so the client
+/// observes the final world state and this row together.
+#[spacetimedb::table(accessor = sim_run, public)]
+pub struct SimRun {
+    #[primary_key]
+    #[auto_inc]
+    pub run_id: u64,
+    pub requested_ticks: u64,
+    pub from_tick: u64,
+    pub to_tick: u64,
+    pub completed_at: Timestamp,
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 // Tables — scheduling seam (DORMANT in MVP)
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -275,9 +295,21 @@ pub fn init(ctx: &ReducerContext) {
         system_ids.push(s.id);
     }
 
-    // One AI faction with a home system; the human faction is created on demand
-    // via `create_faction`. Remaining systems are neutral and claimable.
+    // The client is read-only and cannot create a faction, so the starting
+    // world — the player's faction AND an AI faction, each with a home system —
+    // is seeded here. Remaining systems stay neutral and claimable later.
+    let player_home = system_ids[0];
     let ai_home = system_ids[GALAXY_SYSTEMS as usize / 2];
+
+    let player = ctx.db.faction().insert(Faction {
+        id: 0,
+        name: "Terran Union".to_string(),
+        is_ai: false,
+        minerals: 500,
+        energy: 500,
+        research: 0,
+        home_system_id: player_home,
+    });
     let ai = ctx.db.faction().insert(Faction {
         id: 0,
         name: "AI Raiders".to_string(),
@@ -289,7 +321,13 @@ pub fn init(ctx: &ReducerContext) {
     });
 
     for &sid in &system_ids {
-        let owner = if sid == ai_home { Some(ai.id) } else { None };
+        let owner = if sid == player_home {
+            Some(player.id)
+        } else if sid == ai_home {
+            Some(ai.id)
+        } else {
+            None
+        };
         if owner.is_some() {
             if let Some(sys) = ctx.db.star_system().id().find(sid) {
                 ctx.db.star_system().id().update(StarSystem {
@@ -310,8 +348,11 @@ pub fn init(ctx: &ReducerContext) {
     }
 
     log::info!(
-        "init: seeded {} systems, 1 AI faction (home {})",
+        "init: seeded {} systems; player faction {} (home {}), AI faction {} (home {})",
         GALAXY_SYSTEMS,
+        player.id,
+        player_home,
+        ai.id,
         ai_home
     );
 }
@@ -330,8 +371,10 @@ pub fn on_disconnect(ctx: &ReducerContext) {
 // Faction & account
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Claim a human faction for the calling identity, taking the lowest-id
-/// unowned system as a home (and its planet) with starting resources.
+/// NOT part of the client contract yet (the client is read-only; the player's
+/// faction is seeded in `init`). Kept for tests/admin and as a future client
+/// message: claim a faction for the caller, taking the lowest-id unowned system
+/// as a home (and its planet) with starting resources.
 #[spacetimedb::reducer]
 pub fn create_faction(ctx: &ReducerContext, name: String) -> Result<(), String> {
     if name.trim().is_empty() {
@@ -393,23 +436,73 @@ pub fn create_faction(ctx: &ReducerContext, name: String) -> Result<(), String> 
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// Tick
+// Tick — the ONLY client→server command for now (everything else is read-only)
 // ──────────────────────────────────────────────────────────────────────────
 
-/// MVP: the player's "Advance Turn" button calls this.
+/// Bounds the work done in one transaction.
+const MAX_TICKS_PER_CALL: u64 = 100_000;
+
+/// The sole client command: process `num_ticks` ticks. Records a `sim_run` row
+/// as the completion signal. The whole batch is one atomic transaction, so the
+/// client observes the final state and the new sim_run row together.
 #[spacetimedb::reducer]
-pub fn advance_tick(ctx: &ReducerContext) -> Result<(), String> {
-    run_tick(ctx)
+pub fn advance_ticks(ctx: &ReducerContext, num_ticks: u64) -> Result<(), String> {
+    do_advance(ctx, num_ticks)
 }
 
-/// Shared phase: enable by inserting a `tick_timer` row. Identical logic.
+/// Convenience matching the design example ("go forward one day" = one day ×
+/// ticks-per-day). Expands days into ticks via the shared TICKS_PER_DAY.
+#[spacetimedb::reducer]
+pub fn advance_days(ctx: &ReducerContext, days: u64) -> Result<(), String> {
+    let ticks = days
+        .checked_mul(starframe_shared::TICKS_PER_DAY)
+        .ok_or("days value too large")?;
+    do_advance(ctx, ticks)
+}
+
+/// Shared phase: enable by inserting a `tick_timer` row. One tick per fire.
 #[spacetimedb::reducer]
 pub fn scheduled_tick(ctx: &ReducerContext, _timer: TickTimer) -> Result<(), String> {
     run_tick(ctx)
 }
 
-/// One simulation step. Phases are ordered and deterministic.
-/// MVP implements ECONOMY + ADVANCE; movement/combat/build land next.
+/// Run `num_ticks` deterministic ticks and append the completion record.
+fn do_advance(ctx: &ReducerContext, num_ticks: u64) -> Result<(), String> {
+    if num_ticks == 0 {
+        return Err("num_ticks must be at least 1".to_string());
+    }
+    if num_ticks > MAX_TICKS_PER_CALL {
+        return Err(format!(
+            "num_ticks {num_ticks} exceeds the per-call cap of {MAX_TICKS_PER_CALL}"
+        ));
+    }
+    let from_tick = current_tick(ctx)?;
+    for _ in 0..num_ticks {
+        run_tick(ctx)?;
+    }
+    let to_tick = current_tick(ctx)?;
+    ctx.db.sim_run().insert(SimRun {
+        run_id: 0,
+        requested_ticks: num_ticks,
+        from_tick,
+        to_tick,
+        completed_at: ctx.timestamp,
+    });
+    log::info!("advance: processed {num_ticks} tick(s) ({from_tick} -> {to_tick})");
+    Ok(())
+}
+
+fn current_tick(ctx: &ReducerContext) -> Result<u64, String> {
+    ctx.db
+        .game_state()
+        .id()
+        .find(1)
+        .map(|gs| gs.current_tick)
+        .ok_or_else(|| "game state not initialized".to_string())
+}
+
+/// One deterministic simulation step (ECONOMY + ADVANCE for now;
+/// movement/combat/build land next).
 fn run_tick(ctx: &ReducerContext) -> Result<(), String> {
     let mut gs = ctx
         .db
@@ -439,9 +532,7 @@ fn run_tick(ctx: &ReducerContext) -> Result<(), String> {
     // stochastic rules; MVP economy/combat are fully deterministic).
     gs.current_tick += 1;
     gs.rng_seed = splitmix64(gs.rng_seed);
-    let tick = gs.current_tick;
     ctx.db.game_state().id().update(gs);
-    log::info!("advance_tick: now at tick {}", tick);
     Ok(())
 }
 

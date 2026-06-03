@@ -50,10 +50,11 @@ spacetime build -p server
 sh scripts/start-local.sh                 # terminal 1 — runs on 127.0.0.1:3000
 sh scripts/publish-local.sh               # terminal 2 — publishes as "space4x"
 
-# 4. Drive and inspect the seeded universe
-spacetime call space4x create_faction 'Terran Union'
-spacetime call space4x advance_tick
-spacetime sql  space4x "SELECT * FROM faction"
+# 4. Advance time and inspect (the client is read-only; advancing N ticks is
+#    the only command it sends — here, one day = TICKS_PER_DAY ticks)
+spacetime call space4x advance_days 1
+spacetime sql  space4x "SELECT * FROM faction"   # resources grew
+spacetime sql  space4x "SELECT * FROM sim_run"   # completion signal
 spacetime logs space4x
 ```
 
@@ -61,7 +62,9 @@ spacetime logs space4x
 
 ## Status
 
-Milestone 1 in progress. `init` seeds a small galaxy (8 systems + planets, one AI
-faction); `create_faction` lets a player claim a home system; `advance_tick` runs
-the economy step and advances the deterministic clock. Movement, combat, ship
-building, and the `shared` crate land next (see [docs/TDD.md](docs/TDD.md) §10).
+Milestone 1 complete. `init` seeds the galaxy (8 systems + planets) with a player
+and an AI faction. The client is **read‑only**: its only command is to advance the
+simulation by N ticks (`advance_ticks`, or `advance_days` = days × `TICKS_PER_DAY`),
+and the server records a `sim_run` row when the batch is done. The deterministic
+`run_tick` does the economy step today; movement, combat, and ship building land
+next (see [docs/TDD.md](docs/TDD.md) §10).

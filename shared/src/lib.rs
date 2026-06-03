@@ -45,6 +45,10 @@ pub enum OrderStatus {
 // Tunable constants (first-pass balance; TDD §14.3).
 // ──────────────────────────────────────────────────────────────────────────
 
+/// Simulation ticks in one in-game day. The client advances time in days
+/// (advance_days), which the server expands into this many ticks.
+pub const TICKS_PER_DAY: u64 = 24;
+
 /// Galaxy-distance units covered per unit of `speed` per tick.
 pub const SPEED_SCALE: f32 = 1.0;
 /// Clamp on `thrust / mass`.
