@@ -32,9 +32,13 @@ pub mod star_system_type;
 pub mod tick_timer_type;
 pub mod advance_days_reducer;
 pub mod advance_ticks_reducer;
+pub mod commit_design_reducer;
+pub mod create_draft_reducer;
 pub mod create_faction_reducer;
 pub mod order_build_ship_reducer;
 pub mod order_move_fleet_reducer;
+pub mod place_block_reducer;
+pub mod remove_block_reducer;
 pub mod combat_event_table;
 pub mod faction_table;
 pub mod fleet_table;
@@ -89,9 +93,13 @@ pub use star_system_table::*;
 pub use tick_timer_table::*;
 pub use advance_days_reducer::advance_days;
 pub use advance_ticks_reducer::advance_ticks;
+pub use commit_design_reducer::commit_design;
+pub use create_draft_reducer::create_draft;
 pub use create_faction_reducer::create_faction;
 pub use order_build_ship_reducer::order_build_ship;
 pub use order_move_fleet_reducer::order_move_fleet;
+pub use place_block_reducer::place_block;
+pub use remove_block_reducer::remove_block;
 
 #[derive(Clone, PartialEq, Debug)]
 
@@ -107,6 +115,14 @@ pub enum Reducer {
     AdvanceTicks {
         num_ticks: u64,
 }    ,
+    CommitDesign {
+        draft_id: u64,
+        name: String,
+}    ,
+    CreateDraft {
+        faction_id: u64,
+        name: String,
+}    ,
     CreateFaction {
         name: String,
 }    ,
@@ -117,6 +133,20 @@ pub enum Reducer {
     OrderMoveFleet {
         fleet_id: u64,
         dest_system_id: u64,
+}    ,
+    PlaceBlock {
+        draft_id: u64,
+        x: i32,
+        y: i32,
+        z: i32,
+        block_type: BlockType,
+        rotation: u8,
+}    ,
+    RemoveBlock {
+        draft_id: u64,
+        x: i32,
+        y: i32,
+        z: i32,
 }    ,
 }
 
@@ -130,9 +160,13 @@ impl __sdk::Reducer for Reducer {
         match self {
                         Reducer::AdvanceDays { .. } => "advance_days",
             Reducer::AdvanceTicks { .. } => "advance_ticks",
+            Reducer::CommitDesign { .. } => "commit_design",
+            Reducer::CreateDraft { .. } => "create_draft",
             Reducer::CreateFaction { .. } => "create_faction",
             Reducer::OrderBuildShip { .. } => "order_build_ship",
             Reducer::OrderMoveFleet { .. } => "order_move_fleet",
+            Reducer::PlaceBlock { .. } => "place_block",
+            Reducer::RemoveBlock { .. } => "remove_block",
             _ => unreachable!(),
 }
 }
@@ -148,6 +182,20 @@ fn args_bsatn(&self) -> Result<Vec<u8>, __sats::bsatn::EncodeError> {
                 num_ticks,
 }             => __sats::bsatn::to_vec(&advance_ticks_reducer::AdvanceTicksArgs {
                 num_ticks: num_ticks.clone(),
+}),
+            Reducer::CommitDesign{
+                draft_id,
+                name,
+}             => __sats::bsatn::to_vec(&commit_design_reducer::CommitDesignArgs {
+                draft_id: draft_id.clone(),
+                name: name.clone(),
+}),
+            Reducer::CreateDraft{
+                faction_id,
+                name,
+}             => __sats::bsatn::to_vec(&create_draft_reducer::CreateDraftArgs {
+                faction_id: faction_id.clone(),
+                name: name.clone(),
 }),
             Reducer::CreateFaction{
                 name,
@@ -167,6 +215,32 @@ fn args_bsatn(&self) -> Result<Vec<u8>, __sats::bsatn::EncodeError> {
 }             => __sats::bsatn::to_vec(&order_move_fleet_reducer::OrderMoveFleetArgs {
                 fleet_id: fleet_id.clone(),
                 dest_system_id: dest_system_id.clone(),
+}),
+            Reducer::PlaceBlock{
+                draft_id,
+                x,
+                y,
+                z,
+                block_type,
+                rotation,
+}             => __sats::bsatn::to_vec(&place_block_reducer::PlaceBlockArgs {
+                draft_id: draft_id.clone(),
+                x: x.clone(),
+                y: y.clone(),
+                z: z.clone(),
+                block_type: block_type.clone(),
+                rotation: rotation.clone(),
+}),
+            Reducer::RemoveBlock{
+                draft_id,
+                x,
+                y,
+                z,
+}             => __sats::bsatn::to_vec(&remove_block_reducer::RemoveBlockArgs {
+                draft_id: draft_id.clone(),
+                x: x.clone(),
+                y: y.clone(),
+                z: z.clone(),
 }),
             _ => unreachable!(),
 }

@@ -891,3 +891,173 @@ fn seed_starter_assets(ctx: &ReducerContext, faction_id: u64, system_id: u64) {
         fleet_id: fleet.id,
     });
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Ship designer (drafts + atomic commit). A draft is the live editor buffer;
+// commit_design validates it (shared) and snapshots it into an immutable design.
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Start a new, empty draft for a faction.
+#[spacetimedb::reducer]
+pub fn create_draft(ctx: &ReducerContext, faction_id: u64, name: String) -> Result<(), String> {
+    if ctx.db.faction().id().find(faction_id).is_none() {
+        return Err("faction not found".to_string());
+    }
+    if name.trim().is_empty() {
+        return Err("draft name is required".to_string());
+    }
+    ctx.db.ship_design_draft().insert(ShipDesignDraft {
+        id: 0,
+        faction_id,
+        name,
+        updated_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+/// Place (or overwrite) the block at (x, y, z) in a draft.
+#[spacetimedb::reducer]
+pub fn place_block(
+    ctx: &ReducerContext,
+    draft_id: u64,
+    x: i32,
+    y: i32,
+    z: i32,
+    block_type: BlockType,
+    rotation: u8,
+) -> Result<(), String> {
+    let draft = ctx
+        .db
+        .ship_design_draft()
+        .id()
+        .find(draft_id)
+        .ok_or("draft not found")?;
+    let existing: Vec<u64> = ctx
+        .db
+        .ship_design_draft_block()
+        .draft_id()
+        .filter(draft_id)
+        .filter(|b| b.x == x && b.y == y && b.z == z)
+        .map(|b| b.id)
+        .collect();
+    for id in existing {
+        ctx.db.ship_design_draft_block().id().delete(id);
+    }
+    ctx.db.ship_design_draft_block().insert(ShipDesignDraftBlock {
+        id: 0,
+        draft_id,
+        x,
+        y,
+        z,
+        block_type,
+        rotation: rotation % 4,
+    });
+    ctx.db.ship_design_draft().id().update(ShipDesignDraft {
+        updated_at: ctx.timestamp,
+        ..draft
+    });
+    Ok(())
+}
+
+/// Remove the block at (x, y, z) from a draft (no-op if the cell is empty).
+#[spacetimedb::reducer]
+pub fn remove_block(
+    ctx: &ReducerContext,
+    draft_id: u64,
+    x: i32,
+    y: i32,
+    z: i32,
+) -> Result<(), String> {
+    let draft = ctx
+        .db
+        .ship_design_draft()
+        .id()
+        .find(draft_id)
+        .ok_or("draft not found")?;
+    let existing: Vec<u64> = ctx
+        .db
+        .ship_design_draft_block()
+        .draft_id()
+        .filter(draft_id)
+        .filter(|b| b.x == x && b.y == y && b.z == z)
+        .map(|b| b.id)
+        .collect();
+    for id in existing {
+        ctx.db.ship_design_draft_block().id().delete(id);
+    }
+    ctx.db.ship_design_draft().id().update(ShipDesignDraft {
+        updated_at: ctx.timestamp,
+        ..draft
+    });
+    Ok(())
+}
+
+/// Validate a draft (connectivity + required blocks + power, via the shared
+/// crate) and, if valid, snapshot it into an immutable ShipDesign + blocks.
+/// The draft is left intact so the player can keep iterating.
+#[spacetimedb::reducer]
+pub fn commit_design(ctx: &ReducerContext, draft_id: u64, name: String) -> Result<(), String> {
+    let draft = ctx
+        .db
+        .ship_design_draft()
+        .id()
+        .find(draft_id)
+        .ok_or("draft not found")?;
+    if name.trim().is_empty() {
+        return Err("design name is required".to_string());
+    }
+
+    let blocks: Vec<BlockPlacement> = ctx
+        .db
+        .ship_design_draft_block()
+        .draft_id()
+        .filter(draft_id)
+        .map(|b| BlockPlacement {
+            x: b.x,
+            y: b.y,
+            z: b.z,
+            block_type: b.block_type,
+            rotation: b.rotation,
+        })
+        .collect();
+
+    let report = starframe_shared::validate(&blocks);
+    if !report.is_valid {
+        return Err(report.problems.join("; "));
+    }
+    let stats = ship_stats(&blocks);
+
+    let design = ctx.db.ship_design().insert(ShipDesign {
+        id: 0,
+        faction_id: draft.faction_id,
+        name,
+        total_mass: stats.mass,
+        total_cost: stats.cost,
+        max_hp: stats.max_hp,
+        thrust: stats.thrust,
+        attack: stats.attack,
+        block_count: stats.block_count,
+        created_tick: current_tick(ctx)?,
+    });
+    for b in &blocks {
+        ctx.db.ship_design_block().insert(ShipDesignBlock {
+            id: 0,
+            design_id: design.id,
+            x: b.x,
+            y: b.y,
+            z: b.z,
+            block_type: b.block_type,
+            rotation: b.rotation,
+        });
+    }
+    log::info!(
+        "commit_design: faction {} -> design {} ({} blocks, cost {}, hp {}, attack {})",
+        draft.faction_id,
+        design.id,
+        stats.block_count,
+        stats.cost,
+        stats.max_hp,
+        stats.attack
+    );
+    Ok(())
+}

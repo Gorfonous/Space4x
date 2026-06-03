@@ -62,6 +62,14 @@ spacetime sql  space4x "SELECT * FROM ship"           # fleets / ships
 spacetime sql  space4x "SELECT * FROM combat_event"   # battles
 spacetime sql  space4x "SELECT * FROM sim_run"        # tick-batch completion log
 spacetime logs space4x
+
+# Design a ship via the draft reducers. Enum tags are camelCase, and you must
+# pass `--` so negative block coordinates aren't parsed as CLI flags:
+spacetime call space4x create_draft <faction_id> 'Frigate'
+spacetime call space4x place_block -- <draft_id> 0 0 0 '{"commandCore": {}}' 0
+spacetime call space4x place_block -- <draft_id> 1 0 0 '{"engine": {}}' 0
+spacetime call space4x place_block -- <draft_id> -1 0 0 '{"reactor": {}}' 0
+spacetime call space4x commit_design <draft_id> 'Frigate'   # validates, then snapshots
 ```
 
 `spacetime.json` pins the project to the `local` server with `module-path: ./server`.
