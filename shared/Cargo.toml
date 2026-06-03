@@ -1,0 +1,16 @@
+[package]
+name = "starframe-shared"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Starframe (Space4x) shared types and pure game math"
+
+[features]
+default = []
+# Enables `SpacetimeType` derives on the wire enums so the server module can
+# use these types directly in its tables. OFF by default → the crate is pure
+# and host-testable with no SpacetimeDB/wasm dependency.
+spacetimedb-types = ["dep:spacetimedb"]
+
+[dependencies]
+spacetimedb = { version = "2.3.0", optional = true }

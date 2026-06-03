@@ -1,10 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["client", "server"]
+members = ["client", "server", "shared"]
 # The server is a wasm-only SpacetimeDB module; keep it out of the default
 # host build so `cargo build` / CI stay green. Build it for wasm explicitly
-# via `spacetime build -p server` (see scripts/ and README).
-default-members = ["client"]
+# via `spacetime build -p server` (see scripts/ and README). The shared crate
+# is pure and host-buildable, so it stays in the default set.
+default-members = ["client", "shared"]
 
 [workspace.package]
 version = "0.1.0"

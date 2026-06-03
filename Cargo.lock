@@ -3332,6 +3332,14 @@ version = "0.1.0"
 dependencies = [
  "log",
  "spacetimedb",
+ "starframe-shared",
+]
+
+[[package]]
+name = "starframe-shared"
+version = "0.1.0"
+dependencies = [
+ "spacetimedb",
 ]
 
 [[package]]

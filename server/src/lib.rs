@@ -12,37 +12,12 @@
 //! - State is identity-addressed and faction-scoped from day one (single-player now,
 //!   shared persistent universe later).
 
-use spacetimedb::{Identity, ReducerContext, ScheduleAt, SpacetimeType, Table, Timestamp};
+use spacetimedb::{Identity, ReducerContext, ScheduleAt, Table, Timestamp};
 
-// ──────────────────────────────────────────────────────────────────────────
-// Enums
-// ──────────────────────────────────────────────────────────────────────────
-
-#[derive(SpacetimeType, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum BlockType {
-    Hull,
-    Engine,
-    Weapon,
-    Reactor,
-    Sensor,
-    CommandCore,
-}
-
-#[derive(SpacetimeType, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum OrderType {
-    MoveFleet,
-    Attack,
-    BuildShip,
-    Colonize,
-}
-
-#[derive(SpacetimeType, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum OrderStatus {
-    Pending,
-    Active,
-    Done,
-    Failed,
-}
+// The wire enums BlockType / OrderType / OrderStatus are defined once in the
+// shared crate (single source of truth). The `spacetimedb-types` feature there
+// gives them their `SpacetimeType` derives so they can be used in tables here.
+use starframe_shared::{BlockType, OrderStatus, OrderType};
 
 // ──────────────────────────────────────────────────────────────────────────
 // Tables — singletons & accounts

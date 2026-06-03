@@ -11,3 +11,6 @@ crate-type = ["cdylib"]
 [dependencies]
 spacetimedb = "2.3.0"
 log = "0.4"
+# Single source of truth for the wire enums + pure game math. The feature turns
+# on `SpacetimeType` derives so these types can be used directly in tables.
+starframe-shared = { path = "../shared", features = ["spacetimedb-types"] }
