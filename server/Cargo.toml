@@ -1,0 +1,13 @@
+[package]
+name = "starframe-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Starframe (Space4x) SpacetimeDB server module"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+spacetimedb = "2.3.0"
+log = "0.4"

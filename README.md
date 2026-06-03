@@ -20,15 +20,48 @@ A tick‑based 4X space strategy sandbox: manage an empire across a large univer
 
 - **[Technical Design Document](docs/TDD.md)** — the implementation‑ready spec: workspace layout, SpacetimeDB tables & reducers, the tick pipeline, the ship‑editor data flow, the egui/wgpu client, milestones, and tests.
 
-## Workspace layout (planned)
+## Workspace layout
 
 ```text
 starframe/
-├── shared/   # starframe-shared — enums, formulas, pure sim algorithms
-├── server/   # starframe-module — SpacetimeDB tables + reducers (wasm)
-└── client/   # starframe-client — eframe/egui/wgpu app
+├── server/   # starframe-server — SpacetimeDB module: tables + reducers (wasm)   ✅ initialized
+├── client/   # starframe-client — eframe/egui desktop app                         ✅ scaffolded
+└── shared/   # starframe-shared — enums, formulas, pure sim algorithms            ⏳ planned
 ```
+
+`server` is a wasm-only module and is kept out of the workspace's default host
+build (`default-members = ["client"]`), so `cargo build` at the root builds the
+client. Build the module explicitly with `spacetime build -p server`.
+
+## Local development & hosting
+
+Prerequisites: the Rust toolchain, the `wasm32-unknown-unknown` target
+(`rustup target add wasm32-unknown-unknown`), and the SpacetimeDB CLI
+(`curl -sSf https://install.spacetimedb.com | sh`).
+
+```sh
+# 1. Build / run the desktop client (native window)
+cargo run -p starframe-client
+
+# 2. Build the server module to wasm (validates the module)
+spacetime build -p server
+
+# 3. Host locally: start a local SpacetimeDB instance, then publish the module
+sh scripts/start-local.sh                 # terminal 1 — runs on 127.0.0.1:3000
+sh scripts/publish-local.sh               # terminal 2 — publishes as "space4x"
+
+# 4. Drive and inspect the seeded universe
+spacetime call space4x create_faction 'Terran Union'
+spacetime call space4x advance_tick
+spacetime sql  space4x "SELECT * FROM faction"
+spacetime logs space4x
+```
+
+`spacetime.json` pins the project to the `local` server with `module-path: ./server`.
 
 ## Status
 
-Pre‑implementation. The TDD is the source of truth; code lands per the milestone plan (M1 Core Engine → M2 Client Foundation → M3 Ship Editor → M4 Simulation Loop).
+Milestone 1 in progress. `init` seeds a small galaxy (8 systems + planets, one AI
+faction); `create_faction` lets a player claim a home system; `advance_tick` runs
+the economy step and advances the deterministic clock. Movement, combat, ship
+building, and the `shared` crate land next (see [docs/TDD.md](docs/TDD.md) §10).
