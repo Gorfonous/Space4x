@@ -6,6 +6,8 @@
 //! when a batch completes; the subscription then streams the new state here.
 
 mod module_bindings;
+#[cfg(debug_assertions)]
+mod dev;
 
 use eframe::egui;
 use spacetimedb_sdk::{DbContext, Table};
@@ -17,6 +19,12 @@ const SERVER_URI: &str = "http://127.0.0.1:3000";
 const DB_NAME: &str = "space4x";
 
 fn main() -> eframe::Result {
+    // Debug builds bring the backend up first (start host + publish module) so
+    // `cargo run -p starframe-client` is the only command needed. Set
+    // STARFRAME_AUTOSTART=0 to skip and manage the server yourself.
+    #[cfg(debug_assertions)]
+    dev::bootstrap();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([960.0, 640.0])

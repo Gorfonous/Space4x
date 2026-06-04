@@ -36,41 +36,49 @@ client. Build the module explicitly with `spacetime build -p server`.
 ## Local development & hosting
 
 Prerequisites: the Rust toolchain, the `wasm32-unknown-unknown` target
-(`rustup target add wasm32-unknown-unknown`), and the SpacetimeDB CLI
-(`curl -sSf https://install.spacetimedb.com | sh`).
+(`rustup target add wasm32-unknown-unknown`), and the **SpacetimeDB CLI 2.3.0**
+(the project is built against 2.3.0 — `spacetime version use 2.3.0`).
+
+### Quick start — one command
+
+In **debug** builds the client bootstraps the backend for you: it starts the
+local SpacetimeDB host (if it isn't already running) and publishes the `space4x`
+module, then opens the window.
 
 ```sh
-# 1. Run the desktop client (native window). It connects to the space4x
-#    database at 127.0.0.1:3000 and renders Empire + Systems from live
-#    subscriptions; today it drives time via the Advance Day / Advance Tick
-#    buttons (order/designer UI is next). Start + publish the server first
-#    (steps 2-3) so there's data to show.
 cargo run -p starframe-client
+```
 
-# 2. Build the server module to wasm (validates the module)
-spacetime build -p server
+The host keeps running in the background; re-running just re-publishes and
+reconnects. Set `STARFRAME_AUTOSTART=0` to skip the bootstrap and run the server
+yourself. (Requires the 2.3.0 CLI on PATH — the publish step uses `--module-path`.)
 
-# 3. Host locally: start a local SpacetimeDB instance, then publish the module
-sh scripts/start-local.sh                 # terminal 1 — runs on 127.0.0.1:3000
-sh scripts/publish-local.sh               # terminal 2 — publishes as "space4x"
+### Manual control
 
-# 4. Drive the simulation: issue orders, then advance time (1 day = TICKS_PER_DAY)
-spacetime call space4x order_build_ship <design_id> <fleet_id>     # queue a build
+```sh
+spacetime build -p server                 # build / validate the module to wasm
+sh scripts/start-local.sh                 # terminal 1 — host on 127.0.0.1:3000
+spacetime server set-default local
+sh scripts/publish-local.sh               # terminal 2 — publishes "space4x"
+```
+
+### Driving the simulation by CLI
+
+```sh
+spacetime call space4x order_build_ship <design_id> <fleet_id>      # queue a build
 spacetime call space4x order_move_fleet <fleet_id> <dest_system_id>
-spacetime call space4x advance_days 1
+spacetime call space4x advance_days 1                               # 1 day = TICKS_PER_DAY
 spacetime sql  space4x "SELECT * FROM faction"        # resources
 spacetime sql  space4x "SELECT * FROM ship"           # fleets / ships
 spacetime sql  space4x "SELECT * FROM combat_event"   # battles
 spacetime sql  space4x "SELECT * FROM sim_run"        # tick-batch completion log
-spacetime logs space4x
 
-# Design a ship via the draft reducers. Enum tags are camelCase, and you must
-# pass `--` so negative block coordinates aren't parsed as CLI flags:
+# Design a ship. Enum tags are camelCase, and pass `--` so negative block
+# coordinates aren't parsed as CLI flags:
 spacetime call space4x create_draft <faction_id> 'Frigate'
 spacetime call space4x place_block -- <draft_id> 0 0 0 '{"commandCore": {}}' 0
-spacetime call space4x place_block -- <draft_id> 1 0 0 '{"engine": {}}' 0
 spacetime call space4x place_block -- <draft_id> -1 0 0 '{"reactor": {}}' 0
-spacetime call space4x commit_design <draft_id> 'Frigate'   # validates, then snapshots
+spacetime call space4x commit_design <draft_id> 'Frigate'
 ```
 
 `spacetime.json` pins the project to the `local` server with `module-path: ./server`.
