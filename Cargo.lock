@@ -1678,6 +1678,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glam"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fb167719045debebe9f532320accc7b5c993c5a3b813f5696a11d5ca7bdc57b"
+
+[[package]]
 name = "glow"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4176,9 +4182,13 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 name = "starframe-client"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "eframe",
+ "egui-wgpu",
+ "glam",
  "spacetimedb-sdk",
  "starframe-shared",
+ "wgpu",
 ]
 
 [[package]]

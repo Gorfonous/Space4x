@@ -9,3 +9,7 @@ description = "Starframe (Space4x) desktop client — eframe/egui scaffold"
 eframe = "0.34"
 spacetimedb-sdk = "2.3.0"
 starframe-shared = { path = "../shared" }
+wgpu = "29"
+egui-wgpu = "0.34"
+glam = "0.33"
+bytemuck = { version = "1", features = ["derive"] }

@@ -88,9 +88,10 @@ spacetime call space4x commit_design <draft_id> 'Frigate'
 The **backend MVP is feature-complete**: the server simulates economy, fleet
 movement, ship building, and deterministic combat each tick, and supports
 validated block-based ship design — all verified on a local instance. The desktop
-client connects and renders Empire + Systems and drives time. What remains is
-mostly **client UI** (the wgpu 3D ship editor and order/fleet panels) plus CI and
-polish. Full spec: [docs/TDD.md](docs/TDD.md).
+client connects, renders Empire + Systems, drives time, and now has a **wgpu 3D
+ship editor** (Designer tab: orbit camera, click-to-place blocks, live validity).
+What remains is the gameplay order/fleet UI plus CI, tests, and polish. Full spec:
+[docs/TDD.md](docs/TDD.md).
 
 ## Roadmap & checklist
 
@@ -111,11 +112,10 @@ Mapped to the TDD milestones (§10). ✅ done · 🟡 partial · ⬜ to do.
 - [x] System View (systems, owners, planet counts/output)
 - [x] Advance Day / Week / Tick buttons (`advance_days` / `advance_ticks`)
 
-### M3 — Ship Editor 🟡
+### M3 — Ship Editor ✅
 - [x] Server: `create_draft` / `place_block` / `remove_block` / `commit_design` (uses shared `validate` + `ship_stats`); verified
-- [ ] Client: wgpu 3D editor viewport (instanced cubes, orbit camera, ghost cube, click-place / right-remove, rotate)
-- [ ] Client: block palette + live stats / validity panel
-- [ ] In-editor commit flow
+- [x] Client: wgpu 3D editor viewport — offscreen render-to-texture, instanced cubes, orbit camera, ghost cube, raycast click-to-place / right-click-remove, R to rotate
+- [x] Client: block palette + live stats / validity panel (from shared) + in-editor Commit
 
 ### M4 — Simulation Loop 🟡
 - [x] `order_build_ship` + BUILD phase (timed build; ship joins fleet)
