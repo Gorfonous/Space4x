@@ -24,9 +24,9 @@ A tick‑based 4X space strategy sandbox: manage an empire across a large univer
 
 ```text
 starframe/
-├── server/   # starframe-server — SpacetimeDB module: tables + reducers (wasm)   ✅ initialized
-├── client/   # starframe-client — eframe/egui desktop app                         ✅ scaffolded
-└── shared/   # starframe-shared — enums, formulas, pure sim algorithms            ⏳ planned
+├── shared/   # starframe-shared — enums + pure game math (ship stats, validate)    ✅
+├── server/   # starframe-server — SpacetimeDB module: tables, reducers, tick (wasm) ✅
+└── client/   # starframe-client — eframe/egui desktop app (Empire + Systems views)  ✅
 ```
 
 `server` is a wasm-only module and is kept out of the workspace's default host
@@ -40,10 +40,11 @@ Prerequisites: the Rust toolchain, the `wasm32-unknown-unknown` target
 (`curl -sSf https://install.spacetimedb.com | sh`).
 
 ```sh
-# 1. Run the desktop client (native window). It connects READ-ONLY to the
-#    space4x database at 127.0.0.1:3000 and renders Empire + Systems from live
-#    subscriptions; its only commands are the Advance Day / Advance Tick
-#    buttons. Start + publish the server first (steps 2-3) so there's data.
+# 1. Run the desktop client (native window). It connects to the space4x
+#    database at 127.0.0.1:3000 and renders Empire + Systems from live
+#    subscriptions; today it drives time via the Advance Day / Advance Tick
+#    buttons (order/designer UI is next). Start + publish the server first
+#    (steps 2-3) so there's data to show.
 cargo run -p starframe-client
 
 # 2. Build the server module to wasm (validates the module)
@@ -76,13 +77,65 @@ spacetime call space4x commit_design <draft_id> 'Frigate'   # validates, then sn
 
 ## Status
 
-Milestones 1–2 done; core simulation (M4) in. `init` seeds the galaxy (8 systems +
-planets) with a player and an AI faction, each given a starter Scout design + home
-fleet. Each tick the server simulates fleet **movement**, ship **building**, and
-deterministic **combat** alongside the economy; `advance_ticks` / `advance_days`
-(= days × `TICKS_PER_DAY`) drive time and log a `sim_run` row. The desktop client
-connects, renders Empire + Systems from live subscriptions, and currently drives
-time (Advance Day / Tick); the build/move/attack reducers exist server-side and get
-client UI next (see [docs/TDD.md](docs/TDD.md) §10). The deterministic
-`run_tick` does the economy step today; movement, combat, and ship building land
-next (see [docs/TDD.md](docs/TDD.md) §10).
+The **backend MVP is feature-complete**: the server simulates economy, fleet
+movement, ship building, and deterministic combat each tick, and supports
+validated block-based ship design — all verified on a local instance. The desktop
+client connects and renders Empire + Systems and drives time. What remains is
+mostly **client UI** (the wgpu 3D ship editor and order/fleet panels) plus CI and
+polish. Full spec: [docs/TDD.md](docs/TDD.md).
+
+## Roadmap & checklist
+
+Mapped to the TDD milestones (§10). ✅ done · 🟡 partial · ⬜ to do.
+
+### M1 — Core Engine ✅
+- [x] Cargo workspace with three crates (`shared`, `server`, `client`)
+- [x] `shared`: `BlockType` / `OrderType` / `OrderStatus`, block constants, ship-stat formulas, `validate` (11 unit tests)
+- [x] All SpacetimeDB tables (§3) + the three enums
+- [x] `init` seeds the galaxy with a player and an AI faction (each: starter Scout design + home fleet + ship)
+- [x] Economy tick + clock/RNG advance (`advance_ticks` / `advance_days`)
+- [ ] Seed scale to ~50 systems + 2 AI factions (TDD target; currently 8 systems + 1 AI)
+
+### M2 — Client Foundation ✅
+- [x] Generated Rust client bindings (`spacetime generate`)
+- [x] Client connects + subscribes to all tables (`frame_tick` per egui frame)
+- [x] Empire Overview (factions, resources, current tick, last `sim_run`)
+- [x] System View (systems, owners, planet counts/output)
+- [x] Advance Day / Week / Tick buttons (`advance_days` / `advance_ticks`)
+
+### M3 — Ship Editor 🟡
+- [x] Server: `create_draft` / `place_block` / `remove_block` / `commit_design` (uses shared `validate` + `ship_stats`); verified
+- [ ] Client: wgpu 3D editor viewport (instanced cubes, orbit camera, ghost cube, click-place / right-remove, rotate)
+- [ ] Client: block palette + live stats / validity panel
+- [ ] In-editor commit flow
+
+### M4 — Simulation Loop 🟡
+- [x] `order_build_ship` + BUILD phase (timed build; ship joins fleet)
+- [x] `order_move_fleet` + MOVEMENT phase (transit + arrival relocation)
+- [x] Deterministic COMBAT phase + `combat_event` log + CLEANUP (remove destroyed ships/membership)
+- [x] Verified end-to-end via CLI (build → move → 2v1 combat → destruction)
+- [ ] Client: Fleet Manager + order UI + combat-log view
+
+### Cross-cutting (§9)
+- [x] Deterministic tick — sorted iteration, seeded PRNG in `GameState`, no wall-clock
+- [x] Reducers return `Result<(), String>`; server-side logging
+- [x] `u64` auto-inc ids; `Option<u64>` nullable FKs
+- [ ] Caller→faction authorization on gameplay reducers (today they reference entities by id; identity binding is a shared-phase concern)
+- [ ] Client `env_logger`
+
+### Testing (§12)
+- [x] `shared` unit tests — formulas + `validate` (11 passing)
+- [x] Manual CLI verification of the full tick pipeline + ship design
+- [ ] Automated reducer/integration tests
+- [ ] Golden tick tests (would refactor the server-side sim into pure `shared` functions)
+
+### Tooling
+- [x] `spacetime` CLI, `wasm32-unknown-unknown` target, build/publish/generate scripts, local hosting
+- [ ] CI build gate (fmt, clippy, shared tests, host client build, server wasm build)
+
+### Beyond the original TDD
+- [x] Batch time control: `advance_ticks(n)` / `advance_days(d)` (= `d × TICKS_PER_DAY`) + `sim_run` completion log
+- [ ] Reconcile the spec narrative (a read-only-client model was trialed, then lifted) and refresh the TDD §3–§8 code snippets to the SpacetimeDB 2.3.0 API
+
+### Not in MVP (future — TDD §13)
+Shared persistent universe (scheduled ticks + row-level security), procedural galaxy generation, per-component damage, full 24-orientation rotation, richer AI, diplomacy / logistics / research, client prediction, save slots.
